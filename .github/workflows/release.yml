@@ -1,0 +1,32 @@
+# Compila o app configurador para Windows e publica no Release.
+# Dispara ao empurrar uma tag v* (ex.: git tag v1.0.0 && git push origin v1.0.0)
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # O app só precisa de requests (o resto do requirements é do backend)
+      - run: pip install requests pyinstaller
+
+      # Console visível de propósito: mostra a URL local e fechar a janela encerra o app
+      - run: pyinstaller --onefile --name JobHunter job_hunter_gui.py
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/JobHunter.exe
+          generate_release_notes: true
