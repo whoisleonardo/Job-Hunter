@@ -1,0 +1,21 @@
+# Segredos — NUNCA commitar
+.env
+
+# Dados gerados em runtime pelo backend
+prefs.json
+seen.json
+*.tmp
+
+# Config local do app
+job_hunter_config.json
+
+# Build do PyInstaller
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
