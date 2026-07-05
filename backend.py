@@ -89,6 +89,10 @@ DEFAULT_PREFS = {
     "levels": ["junior"],
     "work_types": ["remoto", "presencial"],
     "sources": ["adzuna", "jooble", "google_jobs"],
+    # Fonte internacional: países/regiões aceitos e se só home office ("remoto")
+    # ou também presencial no exterior ("presencial", buscado via Adzuna por país).
+    "intl_countries": ["global"],
+    "intl_work_types": ["remoto"],
     "match_threshold": 70,
     "use_llm": True,
     # Provedor de IA escolhido por usuário (sem padrão imposto pelo servidor):
@@ -308,42 +312,88 @@ def src_google_jobs(q, loc, country, limit):
     return out
 
 
-def src_internacional(q, limit):
+# Regiões aceitas na fonte internacional: padrão casado contra o texto de
+# localização da vaga (ex.: "USA Only", "Europe", "Worldwide"). País dentro de
+# região também casa (ex.: vaga "Europe" atende quem marcou Portugal).
+INTL_PATTERNS = {
+    "global": r"world|global|anywhere|\bremote\b",
+    "us": r"\bus\b|\busa\b|united states|north america|americas",
+    "ca": r"canada|north america|americas",
+    "gb": r"\buk\b|united kingdom|britain|england",
+    "eu": r"europe|emea",
+    "de": r"germany|deutschland|europe|emea",
+    "fr": r"france|europe|emea",
+    "es": r"\bspain\b|europe|emea",
+    "pt": r"portugal|europe|emea",
+    "nl": r"netherlands|holland|europe|emea",
+    "latam": r"latin america|latam|south america|americas|brazil",
+    "au": r"australia|oceania|apac",
+}
+# Países com API própria na Adzuna (usados p/ vagas PRESENCIAIS no exterior)
+ADZUNA_INTL = {"us", "ca", "gb", "de", "fr", "es", "nl", "au"}
+
+
+def intl_location_ok(location, countries):
+    loc = (location or "").lower()
+    return any(re.search(INTL_PATTERNS.get(c, re.escape(c)), loc) for c in countries)
+
+
+def src_internacional(q, limit, countries=None, work_types=None):
+    countries = [c for c in (countries or ["global"]) if c] or ["global"]
+    work_types = work_types or ["remoto"]
     term = q.split()[-1] if q else "java"
     out = []
-    try:
-        data = http_json("GET", "https://remotive.com/api/remote-jobs", params={"search": term, "limit": limit})
-        for j in data.get("jobs", [])[:limit]:
-            desc = re.sub(r"<[^>]+>", " ", j.get("description", "") or "")[:2000]
-            out.append({"title": j.get("title", ""), "company": j.get("company_name", "—") or "—",
-                        "location": j.get("candidate_required_location", "Remoto (global)") or "Remoto (global)",
-                        "url": j.get("url", ""), "source": "remotive", "description": desc,
-                        "posted": (j.get("publication_date", "") or "")[:10],
-                        "salary": (j.get("salary") or "").strip() or "Não informado",
-                        "address": "Remoto (internacional)", "work_from_home": True})
-    except requests.RequestException:
-        pass
-    try:
-        rows = http_json("GET", "https://remoteok.com/api")
-        got = 0
-        for j in rows if isinstance(rows, list) else []:
-            if not isinstance(j, dict) or "position" not in j:
+    if "remoto" in work_types:
+        try:
+            data = http_json("GET", "https://remotive.com/api/remote-jobs", params={"search": term, "limit": limit})
+            for j in data.get("jobs", [])[:limit]:
+                loc = j.get("candidate_required_location", "Remoto (global)") or "Remoto (global)"
+                if not intl_location_ok(loc, countries):
+                    continue
+                desc = re.sub(r"<[^>]+>", " ", j.get("description", "") or "")[:2000]
+                out.append({"title": j.get("title", ""), "company": j.get("company_name", "—") or "—",
+                            "location": loc,
+                            "url": j.get("url", ""), "source": "remotive", "description": desc,
+                            "posted": (j.get("publication_date", "") or "")[:10],
+                            "salary": (j.get("salary") or "").strip() or "Não informado",
+                            "address": "Remoto (internacional)", "work_from_home": True})
+        except requests.RequestException:
+            pass
+        try:
+            rows = http_json("GET", "https://remoteok.com/api")
+            got = 0
+            for j in rows if isinstance(rows, list) else []:
+                if not isinstance(j, dict) or "position" not in j:
+                    continue
+                title = j.get("position", "") or j.get("title", "")
+                if term.lower() not in (title + " " + " ".join(j.get("tags", []))).lower():
+                    continue
+                loc = j.get("location", "Remoto (global)") or "Remoto (global)"
+                if not intl_location_ok(loc, countries):
+                    continue
+                desc = re.sub(r"<[^>]+>", " ", j.get("description", "") or "")[:2000]
+                out.append({"title": title, "company": j.get("company", "—") or "—",
+                            "location": loc,
+                            "url": j.get("url", ""), "source": "remoteok", "description": desc,
+                            "posted": (j.get("date", "") or "")[:10],
+                            "salary": (f"${j.get('salary_min')}–${j.get('salary_max')}" if j.get("salary_min") else "Não informado"),
+                            "address": "Remoto (internacional)", "work_from_home": True})
+                got += 1
+                if got >= limit:
+                    break
+        except requests.RequestException:
+            pass
+    if "presencial" in work_types:
+        # Vagas presenciais no exterior: Adzuna nos países marcados que têm API
+        for c in countries:
+            if c not in ADZUNA_INTL:
                 continue
-            title = j.get("position", "") or j.get("title", "")
-            if term.lower() not in (title + " " + " ".join(j.get("tags", []))).lower():
-                continue
-            desc = re.sub(r"<[^>]+>", " ", j.get("description", "") or "")[:2000]
-            out.append({"title": title, "company": j.get("company", "—") or "—",
-                        "location": j.get("location", "Remoto (global)") or "Remoto (global)",
-                        "url": j.get("url", ""), "source": "remoteok", "description": desc,
-                        "posted": (j.get("date", "") or "")[:10],
-                        "salary": (f"${j.get('salary_min')}–${j.get('salary_max')}" if j.get("salary_min") else "Não informado"),
-                        "address": "Remoto (internacional)", "work_from_home": True})
-            got += 1
-            if got >= limit:
-                break
-    except requests.RequestException:
-        pass
+            try:
+                out += src_adzuna(term, "", c, min(limit, 10))
+            except requests.RequestException:
+                pass
+    for j in out:
+        j["intl"] = True
     return out
 
 
@@ -360,7 +410,7 @@ def aggregate(p):
         if "google_jobs" in srcs:
             jobs += src_google_jobs(q, loc, country, limit)
         if "internacional" in srcs:
-            jobs += src_internacional(q, limit)
+            jobs += src_internacional(q, limit, p.get("intl_countries"), p.get("intl_work_types"))
     except requests.RequestException:
         pass
     return jobs
@@ -372,6 +422,7 @@ def aggregate(p):
 def score_and_filter(jobs, p):
     keywords = [k for k in re.split(r"[ ,]+", p["keywords"].lower()) if k]
     wl, wt = set(p.get("levels", [])), set(p.get("work_types", []))
+    intl_wt = set(p.get("intl_work_types", ["remoto"]))  # vagas do exterior têm filtro próprio
     result = []
     for j in jobs:
         text = (j["title"] + " " + j.get("description", "")).lower()
@@ -382,9 +433,10 @@ def score_and_filter(jobs, p):
         j["work_type"] = detect_wt(text, j.get("work_from_home", False))
         if j["level"] != "indefinido" and j["level"] not in wl:
             continue
-        if j["work_type"] != "indefinido" and j["work_type"] not in wt:
+        wt_ok = intl_wt if j.get("intl") else wt
+        if j["work_type"] != "indefinido" and j["work_type"] not in wt_ok:
             continue
-        j["score"] = len(hits) + (2 if j["level"] in wl else 0) + (1 if j["work_type"] in wt else 0)
+        j["score"] = len(hits) + (2 if j["level"] in wl else 0) + (1 if j["work_type"] in wt_ok else 0)
         j["uid"] = uid_of(j)
         result.append(j)
     return result

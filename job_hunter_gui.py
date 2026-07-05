@@ -53,6 +53,8 @@ DEFAULT = {
     "levels": ["junior"],
     "work_types": ["remoto", "presencial"],
     "sources": ["adzuna", "jooble", "google_jobs"],
+    "intl_countries": ["global"],
+    "intl_work_types": ["remoto"],
     "match_threshold": 70,
     "use_llm": True,
     "llm_model": "claude-haiku-4-5-20251001",
@@ -69,8 +71,9 @@ DEFAULT = {
 
 # Campos que compõem as PREFERÊNCIAS enviadas ao backend
 PREF_KEYS = ["chat_id", "keywords", "location", "country", "levels", "work_types",
-             "sources", "match_threshold", "use_llm", "llm_provider", "llm_base_url",
-             "llm_model", "resume", "interval_minutes", "enabled", "llm_api_key"]
+             "sources", "intl_countries", "intl_work_types", "match_threshold",
+             "use_llm", "llm_provider", "llm_base_url", "llm_model", "resume",
+             "interval_minutes", "enabled", "llm_api_key"]
 
 # Endpoints do backend que o front pode chamar via /api/<endpoint>
 API_ALLOW = {"prefs/get", "prefs/set", "run_now", "telegram/detect", "telegram/test"}
@@ -255,6 +258,21 @@ input:focus,textarea:focus{border-color:var(--red);box-shadow:0 0 0 3px rgba(223
       </div>
     </section>
 
+    <section id="intlSection" style="display:none;">
+      <h2>Internacional</h2>
+      <div class="grid2">
+        <div class="card">
+          <span class="ttl">Países / regiões aceitos</span>
+          <div id="grpIntlC" style="display:flex;gap:8px;flex-wrap:wrap;padding-top:4px;"></div>
+        </div>
+        <div class="card">
+          <span class="ttl">Tipo de trabalho no exterior</span>
+          <div id="grpIntlW"></div>
+          <span class="hint" style="margin-top:4px;">Presencial busca vagas locais nos países marcados (via Adzuna; regiões como Global/Europa/LatAm valem só pro remoto)</span>
+        </div>
+      </div>
+    </section>
+
     <section>
       <h2>Match e frequência</h2>
       <div class="rowcard">
@@ -396,7 +414,15 @@ const LABELS = {
   levels:  { estagio:"Estágio", junior:"Júnior", pleno:"Pleno", senior:"Sênior" },
   types:   { remoto:"Remoto", presencial:"Presencial", hibrido:"Híbrido" },
   sources: { adzuna:"Adzuna", jooble:"Jooble", google_jobs:"LinkedIn + Indeed", internacional:"Internacional" },
+  intl_wt: { remoto:"Remoto (home office)", presencial:"Presencial (mudar de país)" },
 };
+/* países/regiões da fonte internacional (código entendido pelo backend → rótulo) */
+const INTL_COUNTRIES = [
+  ["global","🌍 Global / Anywhere"], ["us","Estados Unidos"], ["ca","Canadá"],
+  ["gb","Reino Unido"], ["eu","Europa (região)"], ["de","Alemanha"],
+  ["fr","França"], ["es","Espanha"], ["pt","Portugal"], ["nl","Holanda"],
+  ["latam","América Latina"], ["au","Austrália"],
+];
 /* provider -> [llm_provider do backend, base URL SEM /v1 (o backend completa), modelo] */
 const PROVIDERS = {
   "Anthropic":    ["anthropic",     "https://api.anthropic.com",   "claude-haiku-4-5-20251001"],
@@ -407,8 +433,9 @@ const PROVIDERS = {
   "Outro":        ["openai_compat", "",                            ""],
 };
 const PREF_KEYS = ["chat_id","keywords","location","country","levels","work_types",
-                   "sources","match_threshold","use_llm","llm_provider","llm_base_url",
-                   "llm_model","resume","interval_minutes","enabled","llm_api_key"];
+                   "sources","intl_countries","intl_work_types","match_threshold",
+                   "use_llm","llm_provider","llm_base_url","llm_model","resume",
+                   "interval_minutes","enabled","llm_api_key"];
 
 let S = {};                 // config local espelhada (fonte: /local/config)
 let running = false;
@@ -447,7 +474,25 @@ function renderChecks(elId, mapKey, stateKey) {
     cur.has(k) ? cur.delete(k) : cur.add(k);
     S[stateKey] = [...cur];
     renderChecks(elId, mapKey, stateKey);
+    if (stateKey === "sources") renderIntl();  // mostra/esconde a seção internacional
   };
+}
+
+/* chips multi-seleção de países da fonte internacional */
+function renderIntl() {
+  $("intlSection").style.display = (S.sources || []).includes("internacional") ? "" : "none";
+  const sel = new Set(S.intl_countries || ["global"]);
+  const el = $("grpIntlC");
+  el.innerHTML = INTL_COUNTRIES.map(([k, lbl]) =>
+    `<button class="chip ${sel.has(k) ? "on" : ""}" data-c="${k}">${lbl}</button>`).join("");
+  el.onclick = e => {
+    const b = e.target.closest(".chip"); if (!b) return;
+    const k = b.dataset.c, cur = new Set(S.intl_countries || ["global"]);
+    cur.has(k) ? cur.delete(k) : cur.add(k);
+    S.intl_countries = [...cur];
+    renderIntl();
+  };
+  renderChecks("grpIntlW", "intl_wt", "intl_work_types");
 }
 
 function renderProviders() {
@@ -492,6 +537,7 @@ function renderAll() {
   renderChecks("grpLevels", "levels", "levels");
   renderChecks("grpTypes", "types", "work_types");
   renderChecks("grpSources", "sources", "sources");
+  renderIntl();
   renderProviders();
   renderToggles();
 }
@@ -671,6 +717,9 @@ $("btnEye").onclick = () => {
 (async () => {
   try { S = await (await fetch("/local/config")).json(); }
   catch { S = {}; }
+  // compat: configs salvas antes do filtro internacional não têm esses campos
+  S.intl_countries = S.intl_countries || ["global"];
+  S.intl_work_types = S.intl_work_types || ["remoto"];
   renderAll();
   if (S.access_code) reloadPrefs();
 })();
